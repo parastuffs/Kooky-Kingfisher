@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 Usage:
-    delete_buffers.py [-d <DEF_file>] [-v <Verilog_file>] [-l <LEF_file>]
+    delete_buffers.py [-d <DEF_file>] [-v <Verilog_file>] [-l <LEF_file>] [--buff=<BUFFER_START>]
     delete_buffers.py (--help|-h)
 
 Options:
-    -d <DEF_file>       Path to input DEF file
-    -v <Verilog_file>   Path to input Verilog file
-    -l <LEF_file>       Path to LEF file used for the design
-    -h --help           Print this help
+    -d <DEF_file>           Path to input DEF file
+    -v <Verilog_file>       Path to input Verilog file
+    -l <LEF_file>           Path to LEF file used for the design
+    --buff=<BUFFER_START>   Starting characters of the buffer instance name to delete
+    -h --help               Print this help
 
 """
 
@@ -64,14 +65,18 @@ def parse_lef(file, macros):
                     logger.debug("Leaving macro block")
 
 
-def parseDEF(defFile):
+def parseDEF(defFile, instances, netInstances):
     """
     Parse the DEF file to extract the components/nets relationships.
 
     Parameters:
     -----------
-    defFile:str
+    defFile : str
         Path to DEF file.
+    instances : dict
+        {instance name : stdCell name}
+    netInstances : dict
+        {net name : [instance name, pin name]}
 
     Return:
     -------
@@ -82,8 +87,6 @@ def parseDEF(defFile):
 
     expectedComponents = -1 # Number of components as stated on the 'COMPONENTS xxx' line
     expectedNets = -1
-    instances = dict() # {instance name : stdCell name}
-    netInstances = dict() # {net name : [instance name, pin name]}
     inNetDetails = False
     nets = []
 
@@ -157,6 +160,70 @@ def parseDEF(defFile):
         # logger.debug("{}".format(netInstances))
 
 
+def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
+    """
+    Delete buffer paths from DEF file.
+
+    Parameters:
+    -----------
+    defFile : str
+        Path to DEF file.
+    instances : dict
+        {instance name : stdCell name}
+    netInstances : dict
+        {net name : [instance name, pin name]}
+    macros : dict
+        Dictionary with the macros {macro name : [pin name, direction <INPUT, OUTPUT, INOUT>]}
+    buffCondition : str
+        Starting string of instances name to remove
+
+    Return:
+    -------
+    str
+        String holding the new DEF file
+    """
+
+    inComponents = False
+    deletingComponent = False
+    newDEFStr = ""
+    deletedBuffers = 0 # Count of deleted buffers
+    components = 0 # Count of components as stated on the COMPONENTS xxx line in DEF file.
+
+    with open(defFile, 'r') as f:
+        lines = f.readlines()
+
+    with alive_bar(len(lines)) as bar:
+        for line in lines:
+            bar()
+            if not inComponents:
+                match = re.search('COMPONENTS (\d+)', line)
+                if match:
+                    inComponents = True
+                    components = int(match.group(1)) # Get amount of components
+            elif inComponents:
+                if line.strip() == "END COMPONENTS":
+                    inComponents = False
+                    newDEFStr = newDEFStr.replace(f"COMPONENTS {components}", f"COMPONENTS {components-deletedBuffers}") # Replace amount of components
+                    logger.info(f"Deleted {deletedBuffers} buffers out of {components} instances in COMPONENTS")
+                # Typical line for components looks like:
+                # - DFFSR_692 DFFSR + PLACED ( 40 50 ) FS 
+                match = re.search('- ([^\s]+) ([^\s]+) \+ PLACED', line)
+                if match:
+                    instance = match.group(1)
+                    stdCell = match.group(2)
+                    if instance.startswith(buffCondition):
+                        # logger.info("We should delete {}".format(instance))
+                        deletingComponent = True
+                        deletedBuffers += 1
+                if deletingComponent and ';' in line:
+                    deletingComponent = False
+                    continue
+            if not deletingComponent:
+                newDEFStr += line
+    return newDEFStr
+
+
+
 
 
 
@@ -170,6 +237,9 @@ if __name__ == "__main__":
     verilogFile = None
     lefFile = None
     macros = dict() # {macro name : [pin name, direction <INPUT, OUTPUT, INOUT>]}
+    instances = dict() # {instance name : stdCell name}
+    netInstances = dict() # {net name : [instance name, pin name]}
+    buffCondition = "FE"
 
 
     ################
@@ -182,6 +252,8 @@ if __name__ == "__main__":
         verilogFile = args["-v"]
     if args["-l"]:
         lefFile = args["-l"]
+    if args["--buff"]:
+        buffCondition = args["--buff"]
 
     ######################################
     # Create the directory for the output
@@ -208,6 +280,12 @@ if __name__ == "__main__":
     # Add the handler to the logger
     logger.addHandler(fh)
 
+    logger.debug(args)
+
     parse_lef(lefFile, macros)
 
-    parseDEF(defFile)
+    parseDEF(defFile, instances, netInstances)
+
+    DEFStr = deleteBuffers(defFile, macros, instances, netInstances, buffCondition)
+    with open(os.sep.join([output_dir, f"{designName}_noBuffers.def"]), 'w') as f:
+        f.write(DEFStr)
