@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Usage:
-    delete_buffers.py [-d <DEF_file>] [-v <Verilog_file>]
+    delete_buffers.py [-d <DEF_file>] [-v <Verilog_file>] [-l <LEF_file>]
     delete_buffers.py (--help|-h)
 
 Options:
     -d <DEF_file>       Path to input DEF file
     -v <Verilog_file>   Path to input Verilog file
+    -l <LEF_file>       Path to LEF file used for the design
     -h --help           Print this help
 
 """
@@ -37,7 +38,8 @@ def parseDEF(defFile):
 
     expectedComponents = -1 # Number of components as stated on the 'COMPONENTS xxx' line
     expectedNets = -1
-    instances = dict() # {instance name: stdCell name}
+    instances = dict() # {instance name : stdCell name}
+    netInstances = dict() # {net name : [instance name, pin name]}
     inNetDetails = False
     nets = []
 
@@ -81,14 +83,25 @@ def parseDEF(defFile):
                         if match:
                             netName = match.group(1)
                             nets.append(netName)
+                            netInstances[netName] = list() # Prepare entry in dictionary for later net details
                             inNetDetails = True
                     elif inNetDetails:
                         # We reached the end of the relevant part
-                        if "ROUTED" in line or ";" in line or 'PROPERTY' in line or 'SOURCE' in line:
+                        if ('ROUTED' in line or ";" in line or 'PROPERTY' in line or 'SOURCE' in line
+                            or '+ USE' in line or '+ WEIGHT' in line or 'NONDEFAULTRULE' in line):
                             inNetDetails = False
                         # We are still in the 'connectivity' part of the net details
-                        # else:
-
+                        # Those lines look like:
+                        #  ( u_logic_Pdi2z4_reg CK ) ( u_logic_Wai2z4_reg CK ) ( u_logic_U2x2z4_reg CK )
+                        # with one or more parenthesis blocks
+                        else:
+                            lineContent = line.split(')')
+                            for candidate in lineContent:
+                                match = re.search('\( ([^\s]+) ([^\s]+) ', candidate)
+                                if match:
+                                    instance = match.group(1)
+                                    pin = match.group(2)
+                                    netInstances[netName].append([instance, pin])
 
 
 
@@ -96,6 +109,8 @@ def parseDEF(defFile):
 
         logger.info("Found {} components out of {} expected ({}%)".format(len(instances), expectedComponents, 100*(len(instances)/expectedComponents)))
         logger.info("Found {} nets ou of {} expected ({}%)".format(len(nets), expectedNets, 100*(len(nets)/expectedNets)))
+
+        # logger.debug("{}".format(netInstances))
 
 
 
