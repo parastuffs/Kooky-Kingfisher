@@ -20,6 +20,50 @@ from alive_progress import alive_bar
 import re
 
 
+
+def parse_lef(file, macros):
+    """
+    Parse lef file to extract the macros name and pin direction.
+
+    Parameters:
+    -----------
+    file : str
+        Path to LEF file
+    macros : dict
+        Dictionary with the macros {macro name : [pin name, direction <INPUT, OUTPUT, INOUT>]}
+
+    Return:
+    -------
+    n/a
+    """
+    pinBlock = False # True if we are in a PIN block.
+    macroBlock = False # True if we are in a MACRO block.
+
+    logger.info("Reading LEF file {}".format(file))
+
+    with open(file, 'r') as f:
+        lines = f.readlines()
+
+    with alive_bar(len(lines)) as bar:
+        for line in lines:
+            bar()
+            line = line.strip()
+            if 'MACRO' in line:
+                macroName = line.split()[1] # The name of the macro is the second word in the line 'MACRO ...'
+                macros[macroName] = list()
+                macroBlock = True
+            elif macroBlock:
+                if 'PIN' in line:
+                    pinName = line.split()[1] # The name of the pin is the second word in the line 'PIN ...'
+
+                elif 'DIRECTION' in line:
+                    direction = line.split()[1] # the direction of the pin is the second word in the line 'DIRECTION ...'
+                    macros[macroName].append([pinName, direction])
+                elif line == f"END {macroName}":
+                    macroBlock = False
+                    logger.debug("Leaving macro block")
+
+
 def parseDEF(defFile):
     """
     Parse the DEF file to extract the components/nets relationships.
@@ -124,24 +168,35 @@ if __name__ == "__main__":
     designName = ""
     defFile = None
     verilogFile = None
+    lefFile = None
+    macros = dict() # {macro name : [pin name, direction <INPUT, OUTPUT, INOUT>]}
 
+
+    ################
+    # CLI arguments
+    ################
     if args["-d"]:
         defFile = args["-d"]
         designName = defFile.split(os.sep)[-1].replace('.def', '')
     if args["-v"]:
         verilogFile = args["-v"]
+    if args["-l"]:
+        lefFile = args["-l"]
 
-
-    # Create the directory for the output.
+    ######################################
+    # Create the directory for the output
+    ######################################
     rootDir = os.getcwd()
     output_dir = os.sep.join([rootDir, "{}_{}".format(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"), designName)])
-
     try:
         os.makedirs(output_dir)
     except OSError as e:
         if e.errno != errno.EEXIST:
             raise
 
+    #########################
+    # Log file configuration
+    #########################
     # Load base config from conf file.
     logging.config.fileConfig('log.conf')
     # Load logger from config
@@ -153,6 +208,6 @@ if __name__ == "__main__":
     # Add the handler to the logger
     logger.addHandler(fh)
 
-    logger.info("Let's go")
+    parse_lef(lefFile, macros)
 
     parseDEF(defFile)
