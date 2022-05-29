@@ -108,7 +108,7 @@ def parseDEF(defFile, instances, netInstances, instanceNets):
                 if expectedNets == -1:
                     # Typical line for components looks like:
                     # - DFFSR_692 DFFSR + PLACED ( 40 50 ) FS 
-                    match = re.search('- ([^\s]+) ([^\s]+) \+ PLACED', line)
+                    match = re.search('- ([^\s]+) ([^\s]+) \+', line)
                     if match:
                         instance = match.group(1)
                         stdCell = match.group(2)
@@ -139,15 +139,17 @@ def parseDEF(defFile, instances, netInstances, instanceNets):
                             netInstances[netName] = list() # Prepare entry in dictionary for later net details
                             inNetDetails = True
                     elif inNetDetails:
-                        # We reached the end of the relevant part
+
                         if ('ROUTED' in line or ";" in line or 'PROPERTY' in line or 'SOURCE' in line
                             or '+ USE' in line or '+ WEIGHT' in line or 'NONDEFAULTRULE' in line):
                             inNetDetails = False
-                        # We are still in the 'connectivity' part of the net details
-                        # Those lines look like:
-                        #  ( u_logic_Pdi2z4_reg CK ) ( u_logic_Wai2z4_reg CK ) ( u_logic_U2x2z4_reg CK )
-                        # with one or more parenthesis blocks
+                            # We reached the end of the relevant part
+
                         else:
+                            # We are still in the 'connectivity' part of the net details
+                            # Those lines look like:
+                            #  ( u_logic_Pdi2z4_reg CK ) ( u_logic_Wai2z4_reg CK ) ( u_logic_U2x2z4_reg CK )
+                            # with one or more parenthesis blocks
                             lineContent = line.split(')')
                             for candidate in lineContent:
                                 match = re.search('\( ([^\s]+) ([^\s]+) ', candidate)
