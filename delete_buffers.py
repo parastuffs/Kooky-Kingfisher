@@ -40,8 +40,6 @@ def parse_lef(file, macros):
     pinBlock = False # True if we are in a PIN block.
     macroBlock = False # True if we are in a MACRO block.
 
-    logger.info("Reading LEF file {}".format(file))
-
     with open(file, 'r') as f:
         lines = f.readlines()
 
@@ -91,7 +89,6 @@ def parseDEF(defFile, instances, netInstances, instanceNets):
     inNetDetails = False
     nets = []
 
-    logger.info("Parsing DEF file...")
     with alive_bar(len(lines)) as bar:
         for line in lines:
             bar()
@@ -491,12 +488,19 @@ if __name__ == "__main__":
 
     logger.debug(args)
 
+    logger.info("Reading LEF file {}".format(file))
     parse_lef(lefFile, macros)
 
+    logger.info("Parsing DEF file...")
     parseDEF(defFile, instances, netInstances, instanceNets)
 
+    logger.info("Identify buffered nets...")
     bufferedNets = identifyBufferedNets(netInstances, buffCondition, instances, macros, instanceNets)
 
+    logger.info("Delete buffers from DEF file...")
     DEFStr = deleteBuffers(defFile, macros, instances, netInstances, buffCondition, bufferedNets)
-    with open(os.sep.join([output_dir, f"{designName}_noBuffers.def"]), 'w') as f:
+
+    newDEFFilePath = os.sep.join([output_dir, f"{designName}_noBuffers.def"])
+    logger.info(f"Write new DEF file to {newDEFFilePath}")
+    with open(newDEFFilePath, 'w') as f:
         f.write(DEFStr)
