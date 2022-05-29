@@ -119,7 +119,7 @@ def parseDEF(defFile, instances, netInstances, instanceNets):
                     # if match:
 
 
-                    match = re.search('NETS (\d+)', line)
+                    match = re.search('^NETS (\d+)', line)
                     if match:
                         expectedNets = int(match.group(1))
 
@@ -168,7 +168,7 @@ def parseDEF(defFile, instances, netInstances, instanceNets):
 
 
         logger.info("Found {} components out of {} expected ({}%)".format(len(instances), expectedComponents, 100*(len(instances)/expectedComponents)))
-        logger.info("Found {} nets ou of {} expected ({}%)".format(len(nets), expectedNets, 100*(len(nets)/expectedNets)))
+        logger.info("Found {} nets out of {} expected ({}%)".format(len(nets), expectedNets, 100*(len(nets)/expectedNets)))
 
         # logger.debug("{}".format(netInstances))
 
