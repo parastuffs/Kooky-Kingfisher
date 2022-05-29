@@ -311,6 +311,14 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition, buffe
     componentsCount = 0 # Count of components as stated on the COMPONENTS xxx line in DEF file.
     netsCount = 0 # Count of nets as stated on the NETS xxx line in DEF file.
 
+    ######################
+    # New DEF file header
+    newDEFStr += "# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+    newDEFStr += f"# DEF file devoid of buffer instances starting with '{buffCondition}'"
+    newDEFStr += f"# This file was generated on {datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S')} with {os.path.basename(__file__)}"
+    newDEFStr += f"# The original DEF file was located in {defFile}"
+    newDEFStr += "# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+
     #######################################################################
     # Preprocessing buffered nets to list nets to delete when seeing them.
     netsToDelete = list()
@@ -488,7 +496,7 @@ if __name__ == "__main__":
 
     logger.debug(args)
 
-    logger.info("Reading LEF file {}".format(file))
+    logger.info("Reading LEF file {}".format(lefFile))
     parse_lef(lefFile, macros)
 
     logger.info("Parsing DEF file...")
