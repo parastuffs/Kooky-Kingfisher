@@ -189,7 +189,10 @@ def identifyBufferedNets(netInstances, buffCondition, instances, macros, instanc
 
     Return:
     -------
-    n/a
+    absorbingNets : dict
+        {net name : [net names]}
+        Key if the net absorbing the content of the nets in the array value
+
     """
 
     bufferedNets = set() # [net name]
@@ -203,7 +206,7 @@ def identifyBufferedNets(netInstances, buffCondition, instances, macros, instanc
 
     logger.info("Buffered nets: {}/{} ({}%)".format(len(bufferedNets), len(netInstances), len(bufferedNets)/len(netInstances)))
 
-    absorbingNets = dict()  # {net name : [net names]
+    absorbingNets = dict()  # {net name : [net names]}
                             # key is the absorbing net, values is a list of absorbed nets
 
     for buffNet in bufferedNets:
@@ -225,6 +228,8 @@ def identifyBufferedNets(netInstances, buffCondition, instances, macros, instanc
 
     for absorbingNet in absorbingNets.keys():
         absorbingNets[absorbingNet] = traceBufferPath(netInstances, buffCondition, instances, macros, absorbingNet, instanceNets)
+
+    return absorbingNets
 
 
 def traceBufferPath(netInstances, buffCondition, instances, macros, startingNet, instanceNets):
@@ -259,19 +264,19 @@ def traceBufferPath(netInstances, buffCondition, instances, macros, startingNet,
             if pinDirection == "INPUT":
                 # Net is an input for a buffer.
                 # Need to find where is its output.
-                logger.debug("In net {}, buffer {} has input pin.".format(startingNet, instanceName))
+                # logger.debug("In net {}, buffer {} has input pin.".format(startingNet, instanceName))
                 for pinName in instanceNets[instanceName].keys():
                     if macros[bufferStdCell][pinName] == "OUTPUT":
                         outputNet = instanceNets[instanceName][pinName]
-                        logger.debug("  Other side of buffer is net {}".format(outputNet))
+                        # logger.debug("  Other side of buffer is net {}".format(outputNet))
                         fullPath.append(outputNet)
-                        logger.debug("  Jump into that one to see if there are other buffer.")
+                        # logger.debug("  Jump into that one to see if there are other buffer.")
                         fullPath.extend(traceBufferPath(netInstances, buffCondition, instances, macros, outputNet, instanceNets))
     return fullPath
 
 
 
-def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
+def deleteBuffers(defFile, macros, instances, netInstances, buffCondition, bufferedNets):
     """
     Delete buffer paths from DEF file.
 
@@ -287,6 +292,9 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
         Dictionary with the macros {macro name : {pin name : direction <INPUT, OUTPUT, INOUT>}}
     buffCondition : str
         Starting string of instances name to remove
+    bufferedNets : dict
+        {net name : [net names]}
+        Key if the net absorbing the content of the nets in the array value
 
     Return:
     -------
@@ -295,12 +303,22 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
     """
 
     inComponents = False
-    inNets = True
+    inNets = False
     deletingComponent = False
+    deletingNet = False
     newDEFStr = ""
     deletedBuffers = 0 # Count of deleted buffers
+    deletedNets = 0 # Count of deleted nets
     componentsCount = 0 # Count of components as stated on the COMPONENTS xxx line in DEF file.
     netsCount = 0 # Count of nets as stated on the NETS xxx line in DEF file.
+
+    #######################################################################
+    # Preprocessing buffered nets to list nets to delete when seeing them.
+    netsToDelete = list()
+    for bufferPath in bufferedNets.values():
+        netsToDelete.extend(bufferPath)
+    # logger.debug(netsToDelete)
+
 
     with open(defFile, 'r') as f:
         lines = f.readlines()
@@ -308,6 +326,8 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
     with alive_bar(len(lines)) as bar:
         for line in lines:
             bar()
+            # logger.debug("Analysing line:")
+            # logger.debug(line)
             if not inComponents and not inNets:
                 ##############################################
                 # Try to see if we enter the COMPONENTS scope
@@ -318,8 +338,9 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
                 ########################################
                 # Try to see if we enter the NETS scope
                 else:
-                    match = re.search('[^L]NETS (\d+)', line)
+                    match = re.search('^NETS (\d+)', line)
                     if match:
+                        # logger.debug("Entering nets")
                         netsCount = int(match.group(1))
                         inNets = True
 
@@ -341,13 +362,72 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
                 if deletingComponent and ';' in line:
                     deletingComponent = False
                     continue
+
+            #####################################
+            # In nets, merging the buffered ones
             elif inNets:
-                pass
-            if not deletingComponent:
+
+                ######################################
+                # End of NETS scope, update the count
+                if line.strip() == "END NETS":
+                    inNets = False
+                    newDEFStr = newDEFStr.replace(f"NETS {netsCount}", f"NETS {netsCount - deletedNets}") # Replace amount of nets
+                    logger.info(f"Deleted {deletedNets} nets out of {netsCount}")
+                match = re.search('- ([^\s\n]+)', line)
+                if match:
+                    netName = match.group(1)
+
+                    if netName in netsToDelete:
+                        ##############################################
+                        # Net on a buffer path, but not at the start,
+                        # Just delete it.
+                        # logger.debug('{} is marked to be deleted, start skipping lines.'.format(netName))
+                        deletingNet = True
+
+                    elif netName in bufferedNets:
+                        #########################################
+                        # This is a buffered net path
+                        # We will create a new one from scratch
+
+                        # First, get a list of instance/pins from the source net,
+                        # *except* the buffers, obviously
+
+                        # logger.debug(f"{netName} is starting a buffered path.")
+                        newNetInstances = list() # [ [instance, pin] ... ]
+                        for instancePair in netInstances[netName]:
+                            if not instancePair[0].startswith(buffCondition):
+                                newNetInstances.append(instancePair)
+                        for buffNet in bufferedNets[netName]:
+                            for instancePair in netInstances[buffNet]:
+                                if not instancePair[0].startswith(buffCondition):
+                                    newNetInstances.append(instancePair)
+                        newNetStr = f"- {netName}\n"
+                        for pair in newNetInstances:
+                            newNetStr += f"  ( {pair[0]} {pair[1]} )\n"
+                        newNetStr += ";\n"
+                        # logger.debug("Here is the new entry for the DEF file:")
+                        # logger.debug(newNetStr)
+                        newDEFStr += newNetStr
+
+                        deletedNets += len(bufferedNets[netName])
+
+                        deletingNet = True
+
+                    else:
+                        # Not a buffered net, continue copying the original DEF file
+                        pass
+
+                if deletingNet and ';' in line:
+                    # logger.debug("Line is '{}', stop deleting".format(line))
+                    deletingNet = False
+                    continue
+
+            if not deletingComponent and not deletingNet:
+                # logger.debug(f"deletingComponent: {deletingComponent}, deletingNet: {deletingNet}, writing line '{line}'")
                 newDEFStr += line
+            # else:
+            #     logger.debug(f"deletingComponent: {deletingComponent}, deletingNet: {deletingNet}, not writing line.")
     return newDEFStr
-
-
 
 
 
@@ -413,8 +493,8 @@ if __name__ == "__main__":
 
     parseDEF(defFile, instances, netInstances, instanceNets)
 
-    identifyBufferedNets(netInstances, buffCondition, instances, macros, instanceNets)
+    bufferedNets = identifyBufferedNets(netInstances, buffCondition, instances, macros, instanceNets)
 
-    DEFStr = deleteBuffers(defFile, macros, instances, netInstances, buffCondition)
+    DEFStr = deleteBuffers(defFile, macros, instances, netInstances, buffCondition, bufferedNets)
     with open(os.sep.join([output_dir, f"{designName}_noBuffers.def"]), 'w') as f:
         f.write(DEFStr)
