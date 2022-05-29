@@ -31,7 +31,7 @@ def parse_lef(file, macros):
     file : str
         Path to LEF file
     macros : dict
-        Dictionary with the macros {macro name : [pin name, direction <INPUT, OUTPUT, INOUT>]}
+        Dictionary with the macros {macro name : {pin name : direction <INPUT, OUTPUT, INOUT>}}
 
     Return:
     -------
@@ -51,7 +51,7 @@ def parse_lef(file, macros):
             line = line.strip()
             if 'MACRO' in line:
                 macroName = line.split()[1] # The name of the macro is the second word in the line 'MACRO ...'
-                macros[macroName] = list()
+                macros[macroName] = dict()
                 macroBlock = True
             elif macroBlock:
                 if 'PIN' in line:
@@ -59,13 +59,12 @@ def parse_lef(file, macros):
 
                 elif 'DIRECTION' in line:
                     direction = line.split()[1] # the direction of the pin is the second word in the line 'DIRECTION ...'
-                    macros[macroName].append([pinName, direction])
+                    macros[macroName][pinName] = direction
                 elif line == f"END {macroName}":
                     macroBlock = False
-                    logger.debug("Leaving macro block")
 
 
-def parseDEF(defFile, instances, netInstances):
+def parseDEF(defFile, instances, netInstances, instanceNets):
     """
     Parse the DEF file to extract the components/nets relationships.
 
@@ -77,6 +76,8 @@ def parseDEF(defFile, instances, netInstances):
         {instance name : stdCell name}
     netInstances : dict
         {net name : [instance name, pin name]}
+    instanceNets : dict
+        {instance name : {pin name, net name}}
 
     Return:
     -------
@@ -112,6 +113,11 @@ def parseDEF(defFile, instances, netInstances):
                         instance = match.group(1)
                         stdCell = match.group(2)
                         instances[instance] = stdCell
+                        instanceNets[instance] = dict() # Preparing entry to be populated when parsing nets
+
+                    # match = re.search('- ([^\s]+) \+ NET', line)
+                    # if match:
+
 
                     match = re.search('NETS (\d+)', line)
                     if match:
@@ -149,6 +155,11 @@ def parseDEF(defFile, instances, netInstances):
                                     instance = match.group(1)
                                     pin = match.group(2)
                                     netInstances[netName].append([instance, pin])
+                                    if instance == "PIN" and instance not in instanceNets:
+                                        # If the instance actually is a pin, there is not an
+                                        # entry in the dictionary yet.
+                                        instanceNets[instance] = dict()
+                                    instanceNets[instance][pin] = netName
 
 
 
@@ -158,6 +169,106 @@ def parseDEF(defFile, instances, netInstances):
         logger.info("Found {} nets ou of {} expected ({}%)".format(len(nets), expectedNets, 100*(len(nets)/expectedNets)))
 
         # logger.debug("{}".format(netInstances))
+
+
+def identifyBufferedNets(netInstances, buffCondition, instances, macros, instanceNets):
+    """
+
+    Parameters:
+    -----------
+    netInstances : dict
+        {net name : [instance name, pin name]}
+    buffCondition : str
+        Starting string of instances name to remove
+    instances : dict
+        {instance name : stdCell name}
+    macros : dict
+        Dictionary with the macros {macro name : {pin name : direction <INPUT, OUTPUT, INOUT>}}
+    instanceNets : dict
+        {instance name : {pin name, net name}}
+
+    Return:
+    -------
+    n/a
+    """
+
+    bufferedNets = set() # [net name]
+
+    for netname in netInstances.keys():
+        isBuffNet = False
+        cells = netInstances[netname]
+        for instance in cells:
+            if instance[0].startswith(buffCondition):
+                bufferedNets.add(netname)
+
+    logger.info("Buffered nets: {}/{} ({}%)".format(len(bufferedNets), len(netInstances), len(bufferedNets)/len(netInstances)))
+
+    absorbingNets = dict()  # {net name : [net names]
+                            # key is the absorbing net, values is a list of absorbed nets
+
+    for buffNet in bufferedNets:
+        cells = netInstances[buffNet]
+        # logger.debug(f"buffNet: {buffNet}")
+        for instance in cells:
+            instanceName = instance[0]
+            pinName = instance[1]
+            # logger.debug(f"instanceName: {instanceName}")
+            if instanceName == "PIN":
+                # Net is connected to a PIN, not enough to conclude if the net is at the end or begining of the buffered path.
+                continue
+            macroPins = macros[instances[instanceName]]
+            pinDir = macroPins[pinName]
+            if (not instanceName.startswith(buffCondition) and
+                pinDir == "OUTPUT"):
+                # logger.info("Net {} is starting a buffer path.".format(buffNet))
+                absorbingNets[buffNet] = list() # Empty list for now, will be populated with a list of nets to absorb later.
+
+    for absorbingNet in absorbingNets.keys():
+        absorbingNets[absorbingNet] = traceBufferPath(netInstances, buffCondition, instances, macros, absorbingNet, instanceNets)
+
+
+def traceBufferPath(netInstances, buffCondition, instances, macros, startingNet, instanceNets):
+    """
+    From a starting net with a buffer input, find the chain of nets that end up to
+    one or several nets with only non-buffer cells.
+
+    Parameters:
+    -----------
+    netInstances : dict
+        {net name : [instance name, pin name]}
+    macros : dict
+        Dictionary with the macros {macro name : {pin name : direction <INPUT, OUTPUT, INOUT>}}
+    instances : dict
+        {instance name : stdCell name}
+    instanceNets : dict
+        {instance name : {pin name, net name}}
+
+    Return:
+    -------
+    list()
+        List of net names in the buffer path
+    """
+
+    fullPath = list() # List of net names constituing the buffer path
+    for instance in netInstances[startingNet]:
+        instanceName = instance[0]
+        pinName = instance[1]
+        if instanceName.startswith(buffCondition):
+            bufferStdCell = instances[instanceName]
+            pinDirection = macros[bufferStdCell][pinName]
+            if pinDirection == "INPUT":
+                # Net is an input for a buffer.
+                # Need to find where is its output.
+                logger.debug("In net {}, buffer {} has input pin.".format(startingNet, instanceName))
+                for pinName in instanceNets[instanceName].keys():
+                    if macros[bufferStdCell][pinName] == "OUTPUT":
+                        outputNet = instanceNets[instanceName][pinName]
+                        logger.debug("  Other side of buffer is net {}".format(outputNet))
+                        fullPath.append(outputNet)
+                        logger.debug("  Jump into that one to see if there are other buffer.")
+                        fullPath.extend(traceBufferPath(netInstances, buffCondition, instances, macros, outputNet, instanceNets))
+    return fullPath
+
 
 
 def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
@@ -173,7 +284,7 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
     netInstances : dict
         {net name : [instance name, pin name]}
     macros : dict
-        Dictionary with the macros {macro name : [pin name, direction <INPUT, OUTPUT, INOUT>]}
+        Dictionary with the macros {macro name : {pin name : direction <INPUT, OUTPUT, INOUT>}}
     buffCondition : str
         Starting string of instances name to remove
 
@@ -184,10 +295,12 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
     """
 
     inComponents = False
+    inNets = True
     deletingComponent = False
     newDEFStr = ""
     deletedBuffers = 0 # Count of deleted buffers
-    components = 0 # Count of components as stated on the COMPONENTS xxx line in DEF file.
+    componentsCount = 0 # Count of components as stated on the COMPONENTS xxx line in DEF file.
+    netsCount = 0 # Count of nets as stated on the NETS xxx line in DEF file.
 
     with open(defFile, 'r') as f:
         lines = f.readlines()
@@ -195,16 +308,26 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
     with alive_bar(len(lines)) as bar:
         for line in lines:
             bar()
-            if not inComponents:
+            if not inComponents and not inNets:
+                ##############################################
+                # Try to see if we enter the COMPONENTS scope
                 match = re.search('COMPONENTS (\d+)', line)
                 if match:
                     inComponents = True
-                    components = int(match.group(1)) # Get amount of components
+                    componentsCount = int(match.group(1)) # Get amount of components
+                ########################################
+                # Try to see if we enter the NETS scope
+                else:
+                    match = re.search('[^L]NETS (\d+)', line)
+                    if match:
+                        netsCount = int(match.group(1))
+                        inNets = True
+
             elif inComponents:
                 if line.strip() == "END COMPONENTS":
                     inComponents = False
-                    newDEFStr = newDEFStr.replace(f"COMPONENTS {components}", f"COMPONENTS {components-deletedBuffers}") # Replace amount of components
-                    logger.info(f"Deleted {deletedBuffers} buffers out of {components} instances in COMPONENTS")
+                    newDEFStr = newDEFStr.replace(f"COMPONENTS {componentsCount}", f"COMPONENTS {componentsCount-deletedBuffers}") # Replace amount of components
+                    logger.info(f"Deleted {deletedBuffers} buffers out of {componentsCount} instances in COMPONENTS")
                 # Typical line for components looks like:
                 # - DFFSR_692 DFFSR + PLACED ( 40 50 ) FS 
                 match = re.search('- ([^\s]+) ([^\s]+) \+ PLACED', line)
@@ -218,6 +341,8 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition):
                 if deletingComponent and ';' in line:
                     deletingComponent = False
                     continue
+            elif inNets:
+                pass
             if not deletingComponent:
                 newDEFStr += line
     return newDEFStr
@@ -239,6 +364,8 @@ if __name__ == "__main__":
     macros = dict() # {macro name : [pin name, direction <INPUT, OUTPUT, INOUT>]}
     instances = dict() # {instance name : stdCell name}
     netInstances = dict() # {net name : [instance name, pin name]}
+    instanceNets = dict()   # {instance name : {pin name, net name}} 
+                            # Allows to quicky find nets connected to a cell
     buffCondition = "FE"
 
 
@@ -284,7 +411,9 @@ if __name__ == "__main__":
 
     parse_lef(lefFile, macros)
 
-    parseDEF(defFile, instances, netInstances)
+    parseDEF(defFile, instances, netInstances, instanceNets)
+
+    identifyBufferedNets(netInstances, buffCondition, instances, macros, instanceNets)
 
     DEFStr = deleteBuffers(defFile, macros, instances, netInstances, buffCondition)
     with open(os.sep.join([output_dir, f"{designName}_noBuffers.def"]), 'w') as f:
