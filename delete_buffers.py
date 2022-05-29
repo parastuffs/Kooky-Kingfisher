@@ -350,7 +350,7 @@ def deleteBuffers(defFile, macros, instances, netInstances, buffCondition, buffe
                     logger.info(f"Deleted {deletedBuffers} buffers out of {componentsCount} instances in COMPONENTS")
                 # Typical line for components looks like:
                 # - DFFSR_692 DFFSR + PLACED ( 40 50 ) FS 
-                match = re.search('- ([^\s]+) ([^\s]+) \+ PLACED', line)
+                match = re.search('- ([^\s]+) ([^\s]+) \+', line)
                 if match:
                     instance = match.group(1)
                     stdCell = match.group(2)
